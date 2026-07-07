@@ -1,18 +1,21 @@
-﻿// GhostChat Service Worker v2.0 — stale-while-revalidate + push
-const CACHE = 'gc-v1.90';
+// GhostChat Service Worker v2.1 â€” network-first HTML + stale-while-revalidate assets + push
+const CACHE = 'gc-v1.91';
 const GC_BASE_URL = self.location.origin + self.location.pathname.replace(/[^/]*$/, '');
 
-// ── Install: pre-cache shell ──
+// â”€â”€ Install: pre-cache shell (each file independently so one 404 can't kill the rest) â”€â”€
 self.addEventListener('install', function(e){
   e.waitUntil(
     caches.open(CACHE).then(function(c){
-      return c.addAll(['./index.html','./manifest.json','./icon192.png','./icon512.png','./icon-maskable.png','./apple-touch-icon.png']);
-    }).catch(function(){})
+      var files = ['./index.html','./manifest.json','./icon192.png','./icon512.png','./icon-maskable.png','./apple-touch-icon.png'];
+      return Promise.all(files.map(function(f){
+        return c.add(f).catch(function(){});
+      }));
+    })
   );
   self.skipWaiting();
 });
 
-// ── Activate: purge stale caches ──
+// â”€â”€ Activate: purge stale caches â”€â”€
 self.addEventListener('activate', function(e){
   e.waitUntil(
     caches.keys().then(function(keys){
@@ -22,19 +25,43 @@ self.addEventListener('activate', function(e){
   e.waitUntil(self.clients.claim());
 });
 
-// ── Fetch: stale-while-revalidate for app assets, passthrough for API ──
+// â”€â”€ Fetch â”€â”€
 self.addEventListener('fetch', function(e){
   var url = e.request.url;
   if(e.request.method !== 'GET') return;
-  // Supabase API, metered TURN, push APIs → network only (no cache)
+  // Supabase API, metered TURN, push APIs â†’ network only (no cache)
   if(url.indexOf('supabase.co') >= 0 || url.indexOf('metered.ca') >= 0 ||
      url.indexOf('onesignal.com') >= 0 || url.indexOf('fcm.googleapis.com') >= 0) return;
 
+  // HTML navigations (the app shell itself): network-first, no HTTP cache,
+  // so a stuck/broken cached copy can never get permanently stuck being served.
+  // (stale-while-revalidate below could get poisoned forever if a fetch() ever
+  // returns a 304 â€” that skips cache.put and the old cached HTML is served forever.)
+  if(e.request.mode === 'navigate' || url.indexOf('index.html') >= 0){
+    e.respondWith(
+      fetch(e.request, {cache: 'no-store'}).then(function(resp){
+        if(resp && resp.status === 200){
+          caches.open(CACHE).then(function(cache){ cache.put(e.request, resp.clone()); });
+        }
+        return resp;
+      }).catch(function(){
+        return caches.open(CACHE).then(function(cache){
+          return cache.match(e.request).then(function(cached){
+            return cached || new Response('Offline', {status: 503});
+          });
+        });
+      })
+    );
+    return;
+  }
+
+  // Everything else (icons, manifest, etc.): stale-while-revalidate.
   e.respondWith(
     caches.open(CACHE).then(function(cache){
       return cache.match(e.request).then(function(cached){
-        // Revalidate in background
-        var fresh = fetch(e.request).then(function(resp){
+        // no-store avoids the browser silently answering with a 304, which
+        // would skip cache.put below and leave the cache stuck forever.
+        var fresh = fetch(e.request, {cache: 'no-store'}).then(function(resp){
           if(resp && resp.status === 200 && resp.type !== 'opaque'){
             cache.put(e.request, resp.clone());
           }
@@ -47,7 +74,7 @@ self.addEventListener('fetch', function(e){
   );
 });
 
-// ── Notification click ──
+// â”€â”€ Notification click â”€â”€
 self.addEventListener('notificationclick', function(e){
   e.notification.close();
   var targetUrl = GC_BASE_URL;
@@ -67,14 +94,14 @@ self.addEventListener('notificationclick', function(e){
   );
 });
 
-// ── Web Push ──
+// â”€â”€ Web Push â”€â”€
 self.addEventListener('push', function(e){
   if(!e.data) return;
   var data = {};
-  try{data = e.data.json();}catch(err){data = {title:'💬 新消息', body: e.data.text()};}
+  try{data = e.data.json();}catch(err){data = {title:'ðŸ’¬ æ–°æ¶ˆæ¯', body: e.data.text()};}
   e.waitUntil(
-    self.registration.showNotification(data.title||'💬 GhostChat', {
-      body: data.body||'你收到了一条新消息',
+    self.registration.showNotification(data.title||'ðŸ’¬ GhostChat', {
+      body: data.body||'ä½ æ”¶åˆ°äº†ä¸€æ¡æ–°æ¶ˆæ¯',
       icon: './icon192.png', badge: './icon192.png',
       tag: data.tag||'gc-msg', renotify: true, silent: false,
       requireInteraction: false, data: {url: data.url||GC_BASE_URL}
