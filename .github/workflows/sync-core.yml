@@ -1,20 +1,23 @@
 name: Sync from core
-# 这个仓库是 GitHub Pages 的站点根目录，iPhone 用户访问的就是它。
-# 界面代码不再手工维护：从 chunhua1780/ghostchat（内核）生成后提交回本仓库。
+# 本仓库同时通过 GitHub Pages 提供网页版（伪装 PWA 的入口）。
+# 界面代码不再手工维护：从 chunhua1780/ghostchat（内核）生成后提交回本仓库根目录。
 #
-# 为什么是「生成后提交」而不是 deploy-pages：
-# 本仓库当前的 Pages 来源是分支根目录。改成 Actions 部署需要去 Settings → Pages
-# 手动切换，一旦忘了切，站点会直接 404。提交产物则无论哪种来源都能用。
+# 为什么是「提交产物」而不是 deploy-pages：
+# 本仓库的 Pages 来源是分支根目录。改成 Actions 部署需要去 Settings → Pages 手动
+# 切换，忘了切站点会直接 404。提交产物则两种来源都能用。
+#
+# 只覆盖生成出来的那些文件，不做整目录清空 —— 仓库里还有图标源文件、下载页、
+# 构建脚本这些跟内核无关的东西，误删过一次，不能再来第二次。
 on:
   schedule:
-    - cron: '17 3 * * *'        # 每天拉一次内核
-  workflow_dispatch:            # 手动立即同步
+    - cron: '17 3 * * *'
+  workflow_dispatch:
   repository_dispatch:
-    types: [core-updated]       # 内核推送后可主动触发
+    types: [core-updated]
   push:
     branches: [main]
     paths:
-      - '.github/workflows/**'
+      - '.github/workflows/sync-core.yml'
       - 'icon*.png'
       - 'apple-touch-icon.png'
 permissions:
@@ -36,14 +39,14 @@ jobs:
       with:
         node-version: '20'
 
-    - name: Generate site from core
+    - name: Generate web build from core
       run: |
         node .core/tools/build-shell.js --shell=ghostchat --out=.out
-        # 本仓库自己的图标优先（站点图标可能和内核默认的不同）
+        # 本仓库自己的图标优先
         for f in icon192.png icon512.png icon-maskable.png apple-touch-icon.png; do
           [ -f "$f" ] && cp "$f" .out/
         done
-        # 站点还需要这两个，内核里没有就保留仓库原有的
+        # 站点特有、内核里没有的文件保留下来
         for f in push-server.js CNAME .nojekyll; do
           [ -f "$f" ] && [ ! -f ".out/$f" ] && cp "$f" .out/
         done
@@ -54,11 +57,6 @@ jobs:
 
     - name: Commit if changed
       run: |
-        # 用生成结果替换站点文件，但不碰 .git / .github / 图标源文件
-        find . -maxdepth 1 -mindepth 1 \
-          ! -name '.git' ! -name '.github' ! -name '.core' ! -name '.out' \
-          ! -name 'icon*.png' ! -name 'apple-touch-icon.png' \
-          -exec rm -rf {} +
         cp -r .out/. .
         rm -rf .core .out
         git add -A
@@ -67,5 +65,5 @@ jobs:
           exit 0
         fi
         git -c user.email="actions@github.com" -c user.name="core-sync" \
-          commit -m "sync: 从内核 chunhua1780/ghostchat@${GITHUB_SHA::7} 重新生成站点"
+          commit -m "sync: 从内核 chunhua1780/ghostchat 重新生成网页版"
         git push
